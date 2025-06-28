@@ -59,13 +59,16 @@ class WhisperVQEncoder(nn.Module):
         # 🎵 加载Whisper模型
         try:
             self.whisper_model = GLMWhisperVQEncoder.from_pretrained(self.model_path).eval()
+            # 🔧 明确冻结所有参数
+            for param in self.whisper_model.parameters():
+                param.requires_grad = False
+            
             self.feature_extractor = WhisperFeatureExtractor.from_pretrained(self.model_path)
             
             # 获取实际的隐藏维度
             self.actual_hidden_size = self.whisper_model.config.d_model
             
             print(f"✅ WhisperVQEncoder loaded from {self.model_path}")
-            print(f"   Actual hidden size: {self.actual_hidden_size}")
             
         except Exception as e:
             print(f"❌ Failed to load Whisper model: {e}")
@@ -162,9 +165,8 @@ class WhisperVQEncoder(nn.Module):
             
             if audio_input.device != target_device:
                 audio_input = audio_input.to(target_device)
-                print(f"🔧 Moved input features to: {target_device}")
             
-            print(f"🎵 Audio features device (passthrough): {audio_input.device}")
+
             return audio_input
         else:
             raise ValueError(f"Unsupported audio input shape: {audio_input.shape}")
@@ -176,7 +178,6 @@ def build_audio_encoder(config):
     try:
         mm_audio_encoder = getattr(config, 'mm_audio_encoder', 'whisper_vq')
         
-        print(f"🔄 Building audio encoder: {mm_audio_encoder}")
         
         if mm_audio_encoder == 'whisper_vq':
             encoder = WhisperVQEncoder(config)

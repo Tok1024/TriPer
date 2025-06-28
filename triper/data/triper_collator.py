@@ -3,15 +3,41 @@ from dataclasses import dataclass
 from typing import Dict, Sequence, Optional
 import transformers
 from PIL import Image
+from triper.constants import DEFAULT_IMAGE_TOKEN
+from llava.mm_utils import tokenizer_image_token_batch, process_images
+from llava.constants import IMAGE_TOKEN_INDEX
 
 @dataclass
 class TriperDataCollator:
-    """Triper多模态数据整理器 - 在这里进行实际的数据处理"""
     
     tokenizer: transformers.PreTrainedTokenizer
     image_processor: Optional[object] = None
     audio_processor: Optional[object] = None
+    model_cfg: Optional[object] = None  # 🔧 新增：接收模型配置
     max_length: int = 2048
+
+    def _build_conversation_text(self, instance: Dict) -> str:
+        """构建包含图像token的对话文本"""
+        text_parts = []
+        
+        # 🔧 关键修复：如果有图像，在开头插入图像token
+        if instance.get('has_image', False):
+            text_parts.append(DEFAULT_IMAGE_TOKEN)
+        
+        conversation = instance.get('conversation', [])
+        for turn in conversation:
+            speaker = turn.get('speaker', 'Unknown')
+            text = turn.get('text', '')
+            emotion = turn.get('emotion', 'neutral')
+            if text:
+                text_parts.append(f"{speaker} ({emotion}): {text}")
+        
+        if len(text_parts) <= 1:  # 只有图像token或为空
+            text_parts.append("No conversation available.")
+            
+        result = "\n".join(text_parts)
+        print(f"📝 构建的对话文本（包含图像token）: {result[:100]}...")
+        return result
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         """处理一个batch的数据"""
@@ -20,83 +46,105 @@ class TriperDataCollator:
         # 1. 处理对话文本
         conversations = [self._build_conversation_text(inst) for inst in instances]
         
-        # Tokenize对话
-        tokenized = self.tokenizer(
-            conversations,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.max_length
-        )
+        from llava.mm_utils import tokenizer_image_token
+        
+        input_ids_list = []
+        for conv in conversations:
+            input_ids = tokenizer_image_token(
+                conv,
+                tokenizer=self.tokenizer,
+                image_token_index=IMAGE_TOKEN_INDEX,
+                return_tensors='pt'
+            )
+            if len(input_ids.shape) == 1:
+                input_ids = input_ids.unsqueeze(0)
+            input_ids_list.append(input_ids.squeeze(0))
+        
+        # 手动padding
+        max_length = max(ids.shape[0] for ids in input_ids_list)
+        padded_input_ids = []
+        attention_masks = []
+        labels_list = []
+        
+        for input_ids in input_ids_list:
+            pad_length = max_length - input_ids.shape[0]
+            
+            # 创建attention_mask
+            attention_mask = torch.ones(input_ids.shape[0], dtype=torch.long)
+            
+            # 创建labels (简单版本：所有token都作为目标)
+            labels = input_ids.clone()
+            
+            if pad_length > 0:
+                # 右侧padding
+                input_ids = torch.cat([
+                    input_ids,
+                    torch.full((pad_length,), self.tokenizer.pad_token_id, dtype=input_ids.dtype)
+                ])
+                attention_mask = torch.cat([
+                    attention_mask,
+                    torch.zeros(pad_length, dtype=attention_mask.dtype)
+                ])
+                labels = torch.cat([
+                    labels,
+                    torch.full((pad_length,), -100, dtype=labels.dtype)  # padding部分忽略
+                ])
+            
+            padded_input_ids.append(input_ids)
+            attention_masks.append(attention_mask)
+            labels_list.append(labels)
         
         batch = {
-            "input_ids": tokenized.input_ids,
-            "attention_mask": tokenized.attention_mask,
-            "labels": tokenized.input_ids.clone(),  # 简单情况下
+            "input_ids": torch.stack(padded_input_ids),
+            "attention_mask": torch.stack(attention_masks),
+            "labels": torch.stack(labels_list)
         }
-
-        # 2. 处理图像数据 - 修正图像尺寸！
+        
+        print(f"📝 批量tokenization完成: input_ids shape: {batch['input_ids'].shape}")
+    
+        # 2. 处理图像数据 - 🔧 关键修复：使用正确的model_cfg
+        image_feature_length = 0
         if 'image_path' in instances[0]:
-            images = []
+            # 先收集所有图像
+            pil_images = []
             for inst in instances:
                 if inst.get('has_image', False):
-                    # 动态加载图像
-                    from triper.data.triper_dataset import TriperDataset
-                    temp_dataset = TriperDataset.__new__(TriperDataset)
-                    temp_dataset.default_image_size = (336, 336)  # 修改为模型期望的尺寸
-                    image = temp_dataset._load_image_raw(inst['image_path'])
+                    image_path = inst['image_path']
+                    image = Image.open(image_path).convert('RGB')
                 else:
-                    image = Image.new('RGB', (336, 336), (255, 255, 255))  # 修改为336x336
-                images.append(image)
+                    # 创建空白图像
+                    image = Image.new('RGB', (336, 336), (255, 255, 255))
+                pil_images.append(image)
             
-            # 应用图像处理器
+            # 🔧 关键修复：使用正确的model_cfg
             if self.image_processor:
                 try:
-                    # 批量处理图像，让处理器自己决定尺寸
-                    processed = self.image_processor(images, return_tensors="pt")
+                    # 调用 process_images 函数，使用传入的model_cfg
+                    processed_images = process_images(
+                        images=pil_images,
+                        image_processor=self.image_processor,
+                        model_cfg=self.model_cfg  # 🔧 使用正确的model_cfg
+                    )
                     
-                    # 处理不同类型的返回值
-                    if isinstance(processed, dict):
-                        if 'pixel_values' in processed:
-                            batch['images'] = processed['pixel_values']
-                            print(f"🖼️ Image batch shape: {batch['images'].shape}")
-                        elif 'input_ids' in processed:
-                            batch['images'] = processed['input_ids']
-                        else:
-                            # 如果有其他键，取第一个张量
-                            for key, value in processed.items():
-                                if isinstance(value, torch.Tensor):
-                                    batch['images'] = value
-                                    print(f"🖼️ Image batch shape: {batch['images'].shape}")
-                                    break
+                    # process_images 返回的可能是 tensor 或 tensor 列表
+                    if isinstance(processed_images, list):
+                        batch['images'] = torch.stack(processed_images)
                     else:
-                        # 如果直接返回张量
-                        batch['images'] = processed
-                        print(f"🖼️ Image batch shape: {batch['images'].shape}")
-                        
+                        batch['images'] = processed_images
+                    
+                    image_feature_length = 576  # LLaVA-1.5 的图像特征长度
+                    print(f"🖼️ LLaVA process_images 处理成功，shape: {batch['images'].shape}")
+                    
                 except Exception as e:
-                    print(f"❌ 图像处理失败: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    # 使用默认图像张量，确保使用正确的尺寸
-                    import torchvision.transforms as transforms
-                    transform = transforms.Compose([
-                        transforms.Resize((336, 336)),  # 修改为336x336
-                        transforms.ToTensor(),
-                    ])
-                    image_tensors = [transform(img) for img in images]
-                    batch['images'] = torch.stack(image_tensors)
-            else:
-                # 如果没有处理器，手动转换为张量，使用正确的尺寸
-                import torchvision.transforms as transforms
-                transform = transforms.Compose([
-                    transforms.Resize((336, 336)),  # 修改为336x336
-                    transforms.ToTensor(),
-                ])
-                image_tensors = [transform(img) for img in images]
-                batch['images'] = torch.stack(image_tensors)
+                    print(f"❌ LLaVA process_images 失败: {e}")
+                    # 备用方案：直接使用 image_processor
+                    processed = self.image_processor(pil_images, return_tensors="pt")
+                    batch['images'] = processed['pixel_values']
+                    image_feature_length = 576
+                    print(f"🖼️ 备用图像处理成功，shape: {batch['images'].shape}")
 
         # 3. 处理音频数据
+        audio_feature_length = 0
         if 'audio_path' in instances[0]:
             audio_features = []
             for inst in instances:
@@ -105,71 +153,43 @@ class TriperDataCollator:
                     
                     if self.audio_processor:
                         try:
-                            # 直接传入音频路径，让音频编码器处理
                             audio_feat = self.audio_processor(audio_path)
                             
-                            # 确保返回的是纯张量
                             if hasattr(audio_feat, 'data'):
                                 audio_feat = audio_feat.data
                             elif isinstance(audio_feat, dict):
-                                # 如果是字典，取第一个张量
                                 for key, value in audio_feat.items():
                                     if isinstance(value, torch.Tensor):
                                         audio_feat = value
                                         break
                             
-                            # 如果返回的是batch格式，取第一个
                             if audio_feat.dim() == 3 and audio_feat.shape[0] == 1:
-                                audio_feat = audio_feat.squeeze(0)  # [seq_len, hidden_dim]
+                                audio_feat = audio_feat.squeeze(0)
                             
-                            print(f"🎵 Audio feature shape: {audio_feat.shape}")
+                            audio_feature_length = audio_feat.shape[0]
                             
                         except Exception as e:
                             print(f"❌ 音频处理失败: {e}")
-                            import traceback
-                            traceback.print_exc()
-                            # 使用默认维度的零张量作为备用
-                            audio_feat = torch.zeros(64, 1280)  # [seq_len, hidden_dim]
+                            audio_feat = torch.zeros(64, 1280)
+                            audio_feature_length = 64
                     else:
-                        # 如果没有音频处理器，加载原始音频
-                        from triper.data.triper_dataset import TriperDataset
-                        temp_dataset = TriperDataset.__new__(TriperDataset)
-                        temp_dataset.max_audio_length = 16000 * 10
-                        waveform = temp_dataset._load_audio_raw(audio_path)
-                        audio_feat = waveform.mean(dim=0) if waveform.dim() > 1 else waveform
+                        audio_feat = torch.zeros(64, 1280)
+                        audio_feature_length = 64
                 else:
-                    # 没有音频文件时的默认值
-                    audio_feat = torch.zeros(64, 1280)  # [seq_len, hidden_dim]
+                    audio_feat = torch.zeros(64, 1280)
+                    audio_feature_length = 64
                     
                 audio_features.append(audio_feat)
             
-            # Stack所有音频特征
             if audio_features:
                 batch['audio_features'] = torch.stack(audio_features)
                 print(f"🎵 Final audio batch shape: {batch['audio_features'].shape}")
 
-        return batch
+        # 4. 输出统计信息
+        text_length = batch["input_ids"].shape[1]
+        total_length = text_length + image_feature_length + audio_feature_length
+        
+        print(f"📏 序列长度: 文本={text_length}, 图像={image_feature_length}, 音频={audio_feature_length}, 总计={total_length}")
+        print(f"📏 Labels shape: {batch['labels'].shape}")
 
-    def _build_conversation_text(self, instance: Dict) -> str:
-        """构建用于训练的对话文本"""
-        text_parts = []
-        
-        # 添加场景描述
-        scene_desc = instance.get('scene_description', '')
-        if scene_desc:
-            text_parts.append(f"Scene: {scene_desc}")
-        
-        # 添加对话内容
-        conversation = instance.get('conversation', [])
-        for turn in conversation:
-            speaker = turn.get('speaker', 'Unknown')
-            text = turn.get('text', '')
-            emotion = turn.get('emotion', 'neutral')
-            if text:  # 只添加非空对话
-                text_parts.append(f"{speaker} ({emotion}): {text}")
-        
-        # 如果没有任何内容，返回默认文本
-        if not text_parts:
-            text_parts.append("No conversation available.")
-            
-        return "\n".join(text_parts)
+        return batch

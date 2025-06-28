@@ -106,8 +106,23 @@ class TriperDataset(Dataset):
         }
 
     def _load_audio_raw(self, audio_path: str) -> torch.Tensor:
-        """加载原始音频（用于collator调用）"""
+        """加载原始音频并预提取特征"""
         try:
+            if hasattr(self, '_audio_cache'):
+                if audio_path in self._audio_cache:
+                    return self._audio_cache[audio_path]
+            
+            # 使用外部音频编码器预提取特征
+            if hasattr(self, 'audio_encoder') and self.audio_encoder is not None:
+                with torch.no_grad():
+                    features = self.audio_encoder.extract_features_from_audio(audio_path)
+                    # 缓存特征
+                    if not hasattr(self, '_audio_cache'):
+                        self._audio_cache = {}
+                    self._audio_cache[audio_path] = features
+                    return features
+            
+            # 如果没有编码器，返回原始音频
             waveform, sample_rate = torchaudio.load(audio_path)
             
             # 确保是单声道
@@ -125,7 +140,7 @@ class TriperDataset(Dataset):
                 
         except Exception as e:
             print(f"警告: 无法加载音频文件 {audio_path}: {e}")
-            return torch.zeros((1, self.max_audio_length))
+            return torch.zeros(64, 1280)  # 默认特征
 
     def _load_image_raw(self, image_path: str) -> Image.Image:
         """加载原始图像（用于collator调用）"""

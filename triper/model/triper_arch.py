@@ -214,11 +214,16 @@ class TriperModel(PreTrainedModel):
         """
         if not self.is_ready():
             raise RuntimeError("模型组件尚未完全配置")
+        
 
+        print (f"初始input ids形状: {input_ids.shape if input_ids is not None else 'None'}")
+        
         if inputs_embeds is None:
             # 1. 先处理图像（复用LLaVA的逻辑）
             if self.llava_model is None:
                 raise RuntimeError("LLaVA model is not attached")
+            
+            print("images shape:", images.shape if images is not None else "None")
             
             multimodal_result = self.llava_model.prepare_inputs_labels_for_multimodal(
                 input_ids,
@@ -227,9 +232,10 @@ class TriperModel(PreTrainedModel):
                 past_key_values,
                 labels,
                 images,
-                image_sizes
             )
             
+            
+
             # 明确类型转换
             input_ids = multimodal_result[0]
             position_ids = multimodal_result[1] 
@@ -238,11 +244,125 @@ class TriperModel(PreTrainedModel):
             inputs_embeds = multimodal_result[4]
             labels = multimodal_result[5]
             
+            print(f"处理图像后, embedding形状: {inputs_embeds.shape if inputs_embeds is not None else 'None'}")
+            
         # 2. 处理音频特征（新增逻辑）
         if audio_features is not None:
             inputs_embeds = self._insert_audio_features(
                 inputs_embeds, input_ids, audio_features
             )
+            
+            print(f"插入音频后, 嵌入形状: {inputs_embeds.shape if inputs_embeds is not None else 'None'}")
+        
+        # 🔧 批量序列长度对齐 - 修复类型问题
+        if inputs_embeds is not None and inputs_embeds.shape[0] > 1:  # 只在批量处理时执行
+            print(f"🔍 批量长度对齐前:")
+            print(f"  inputs_embeds shape: {inputs_embeds.shape}")
+            print(f"  attention_mask shape: {attention_mask.shape if attention_mask is not None else None}")
+            
+            # 检查每个样本的实际长度
+            if attention_mask is not None:
+                actual_lengths = attention_mask.sum(dim=1)
+                print(f"  实际长度: {actual_lengths.tolist()}")
+                
+                # 找到最大的实际长度 - 明确类型转换
+                max_actual_length = int(actual_lengths.max().item())
+                
+                # 如果存在长度不一致，截断到最大实际长度
+                if inputs_embeds.shape[1] != max_actual_length:
+                    print(f"🔧 截断序列长度: {inputs_embeds.shape[1]} → {max_actual_length}")
+                    
+                    inputs_embeds = inputs_embeds[:, :max_actual_length, :]
+                    attention_mask = attention_mask[:, :max_actual_length]
+                    
+                    if position_ids is not None:
+                        position_ids = position_ids[:, :max_actual_length]
+                    if labels is not None:
+                        labels = labels[:, :max_actual_length]
+                        
+                    print(f"✅ 对齐后 inputs_embeds shape: {inputs_embeds.shape}")
+            
+            # 🔧 关键修复：确保所有样本的长度完全一致
+            batch_size = inputs_embeds.shape[0]
+            
+            # 如果没有attention_mask，创建统一的attention_mask
+            if attention_mask is None:
+                attention_mask = torch.ones(
+                    (batch_size, inputs_embeds.shape[1]), 
+                    dtype=torch.bool, 
+                    device=inputs_embeds.device
+                )
+            
+            # 检查是否所有样本长度都相同
+            actual_lengths = attention_mask.sum(dim=1)
+            unique_lengths = set(actual_lengths.tolist())
+            
+            if len(unique_lengths) > 1:
+                # 如果长度不同，统一到最长的长度，进行padding而不是截断
+                max_length = int(actual_lengths.max().item())  # 改为最大长度
+                print(f"⚠️ 检测到不同长度，统一到最长长度: {max_length}")
+                
+                # 为每个样本进行padding
+                batch_size = inputs_embeds.shape[0]
+                embed_dim = inputs_embeds.shape[2]
+                
+                # 创建新的padded tensors
+                new_inputs_embeds = torch.zeros(
+                    (batch_size, max_length, embed_dim),
+                    dtype=inputs_embeds.dtype,
+                    device=inputs_embeds.device
+                )
+                new_attention_mask = torch.zeros(
+                    (batch_size, max_length),
+                    dtype=attention_mask.dtype,
+                    device=attention_mask.device
+                )
+                
+                # 为每个样本填充数据
+                for i in range(batch_size):
+                    actual_len = int(actual_lengths[i].item())
+                    # 复制实际数据
+                    new_inputs_embeds[i, :actual_len, :] = inputs_embeds[i, :actual_len, :]
+                    new_attention_mask[i, :actual_len] = 1
+                    # 剩余部分自动为0 (padding)
+                
+                inputs_embeds = new_inputs_embeds
+                attention_mask = new_attention_mask
+                
+                # 处理其他张量
+                if position_ids is not None:
+                    new_position_ids = torch.zeros(
+                        (batch_size, max_length),
+                        dtype=position_ids.dtype,
+                        device=position_ids.device
+                    )
+                    for i in range(batch_size):
+                        actual_len = int(actual_lengths[i].item())
+                        if actual_len <= position_ids.shape[1]:
+                            new_position_ids[i, :actual_len] = position_ids[i, :actual_len]
+                        else:
+                            # 如果position_ids较短，扩展它
+                            new_position_ids[i, :position_ids.shape[1]] = position_ids[i]
+                            new_position_ids[i, position_ids.shape[1]:actual_len] = torch.arange(
+                                position_ids.shape[1], actual_len,
+                                dtype=position_ids.dtype, device=position_ids.device
+                            )
+                    position_ids = new_position_ids
+                
+                if labels is not None:
+                    new_labels = torch.full(
+                        (batch_size, max_length),
+                        -100,  # ignore_index for loss calculation
+                        dtype=labels.dtype,
+                        device=labels.device
+                    )
+                    for i in range(batch_size):
+                        actual_len = min(int(actual_lengths[i].item()), labels.shape[1])
+                        new_labels[i, :actual_len] = labels[i, :actual_len]
+                    labels = new_labels
+                    
+                print(f"🔧 最终padding后 inputs_embeds shape: {inputs_embeds.shape}")
+                print(f"🔧 最终padding后 attention_mask shape: {attention_mask.shape}")
         
         # 3. 调用基础LLM
         if self.llava_model is None:
@@ -273,10 +393,6 @@ class TriperModel(PreTrainedModel):
         if self._audio_encoder is None:
             raise RuntimeError("Audio encoder is not set")
         
-        print(f"🎵 Processing audio features:")
-        print(f"  Input audio shape: {audio_features.shape}")
-        print(f"  Input audio dtype: {audio_features.dtype}")
-        print(f"  Input audio device: {audio_features.device}")
         
         # 🔧 关键修复：确保音频编码器输出正确的数据类型
         with torch.no_grad():
@@ -289,9 +405,6 @@ class TriperModel(PreTrainedModel):
                 # 从LLaVA模型的参数推断数据类型
                 target_dtype = next(self.llava_model.parameters()).dtype
             
-            print(f"  Target dtype: {target_dtype}")
-            print(f"  Encoded audio dtype: {encoded_audio.dtype}")
-            
             if encoded_audio.dtype != target_dtype:
                 print(f"  🔄 Converting encoded audio to {target_dtype}")
                 encoded_audio = encoded_audio.to(dtype=target_dtype)
@@ -302,8 +415,6 @@ class TriperModel(PreTrainedModel):
         # 音频嵌入 - 投影器会自动处理数据类型匹配
         audio_embeds = self.audio_projector(encoded_audio)
         
-        print(f"  Audio embeds shape: {audio_embeds.shape}")
-        print(f"  Audio embeds dtype: {audio_embeds.dtype}")
         
         # 连接到 inputs_embeds 末尾
         if inputs_embeds is None:

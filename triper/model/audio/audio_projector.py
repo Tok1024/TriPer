@@ -72,34 +72,25 @@ class AudioProjector(nn.Module):
         Returns:
             projected: [batch, seq_len, hidden_size]
         """
-        print(f"🎵 AudioProjector forward:")
-        print(f"  Input shape: {audio_features.shape}")
-        print(f"  Input dtype: {audio_features.dtype}")
-        print(f"  Input device: {audio_features.device}")
+        
+        print(f"🔄 AudioProjector forward called with input shape: {audio_features.shape}")
         
         # 🔧 关键修复：确保数据类型匹配
         # 获取模型权重的数据类型
         model_dtype = next(self.parameters()).dtype
-        print(f"  Model dtype: {model_dtype}")
         
         # 如果输入类型与模型类型不匹配，转换输入类型
         if audio_features.dtype != model_dtype:
-            print(f"  🔄 Converting input from {audio_features.dtype} to {model_dtype}")
             audio_features = audio_features.to(dtype=model_dtype)
         
         # 确保设备匹配
         model_device = next(self.parameters()).device
         if audio_features.device != model_device:
-            print(f"  🔄 Moving input from {audio_features.device} to {model_device}")
             audio_features = audio_features.to(device=model_device)
         
         try:
             projected = self.projector(audio_features)
             projected = self.layer_norm(projected)
-            
-            print(f"  Output shape: {projected.shape}")
-            print(f"  Output dtype: {projected.dtype}")
-            print(f"  Output device: {projected.device}")
             
             return projected
             
