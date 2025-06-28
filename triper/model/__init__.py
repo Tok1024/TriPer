@@ -7,3 +7,4 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from .triper_arch import TriperModel
+from .builder import from_pretrained_components
