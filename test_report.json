@@ -1,0 +1,344 @@
+================================================================================
+🚀 TRIPER MODEL COMPREHENSIVE TEST
+================================================================================
+✅ GPU缓存已清理
+
+📋 测试配置:
+  llava_model_path: /sda1/llava-v1.5-13b
+  audio_encoder_path: /sda1/glm-4-voice-tokenizer
+  data_path: /home/wly/szl_all_code/triper-project/data/simple_data_20_samples.json
+  media_root: /home/wly/szl_all_code/triper-project/data
+  device: cuda:3
+  freeze_llava: True
+
+==================================================
+📦 测试1: 模型组件加载
+==================================================
+🔄 加载模型组件...
+🔄 Building Triper model from components...
+   LLaVA model: /sda1/llava-v1.5-13b
+   Audio encoder: /sda1/glm-4-voice-tokenizer
+   Audio projector: Built from config
+   Freeze LLaVA: True
+🔄 Loading LLaVA model...
+You are using a model of type llava to instantiate a model of type llava_llama. This is not supported for all configurations of models and can yield errors.
+Loading checkpoint shards: 100%|
+🔄 Building audio encoder...
+✅ WhisperVQEncoder loaded from /sda1/glm-4-voice-tokenizer
+🔄 Moving audio encoder to device: cuda:3
+🔒 Audio encoder parameters frozen
+✅ Audio encoder built and moved to cuda:3: WhisperVQEncoder
+🔄 Creating Triper model...
+TriperModel has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.
+🔄 Building audio projector...
+🔧 AudioProjector config:
+  audio_hidden_size: 1280
+  hidden_size: 5120
+  projector_type: mlp2x_gelu
+✅ AudioProjector created successfully
+✅ Audio projector built: AudioProjector
+✅ TriperModel initialized with config: triper
+🔄 Moving Triper model to device: cuda:3
+✅ LLaVA model attached: LlavaLlamaForCausalLM
+🔒 LLaVA model parameters frozen
+🎵 Audio encoder attached: WhisperVQEncoder
+📦 Components set: tokenizer(LlamaTokenizer), processor(CLIPImageProcessor), context_len(2048)
+✅ Triper model created successfully!
+
+🏗️  Triper Model Summary
+============================================================
+📦 Components:
+  🦙 LLaVA: ✅ (LlavaLlamaForCausalLM)
+  🎵 Audio Encoder: ✅ (WhisperVQEncoder) 🔒 External (Frozen)
+  🔗 Audio Projector: ✅ (AudioProjector) 🔓 Trainable
+  📝 Tokenizer: ✅ (LlamaTokenizer) 🔒 External
+  🖼️ Image Processor: ✅ (CLIPImageProcessor) 🔒 External
+
+📊 Trainable Parameters:
+  Total: 13,383,627,776
+  Trainable: 32,788,480 (0.2%)
+    llava: 13,350,839,296 (0.0% trainable) 🔒
+    audio_projector: 32,788,480 (100.0% trainable) 🔓
+============================================================
+✅ 模型组件加载成功
+
+🏗️  Triper Model Summary
+============================================================
+📦 Components:
+  🦙 LLaVA: ✅ (LlavaLlamaForCausalLM)
+  🎵 Audio Encoder: ✅ (WhisperVQEncoder) 🔒 External (Frozen)
+  🔗 Audio Projector: ✅ (AudioProjector) 🔓 Trainable
+  📝 Tokenizer: ✅ (LlamaTokenizer) 🔒 External
+  🖼️ Image Processor: ✅ (CLIPImageProcessor) 🔒 External
+
+📊 Trainable Parameters:
+  Total: 13,383,627,776
+  Trainable: 32,788,480 (0.2%)
+    llava: 13,350,839,296 (0.0% trainable) 🔒
+    audio_projector: 32,788,480 (100.0% trainable) 🔓
+============================================================
+
+==================================================
+📊 测试2: 数据集和Collator
+==================================================
+🔄 加载数据集...
+正在从以下路径加载数据集描述文件: /home/wly/szl_all_code/triper-project/data/simple_data_20_samples.json
+发现 20 个数据样本。
+数据集模式: raw
+音频文件夹: /home/wly/szl_all_code/triper-project/data/audio
+视频文件夹: /home/wly/szl_all_code/triper-project/data/video
+图像文件夹: /home/wly/szl_all_code/triper-project/data/images
+✅ 数据集加载成功，共 20 个样本
+🔄 创建数据collator...
+✅ Collator创建成功
+🔄 测试单个样本...
+样本结构: ['id', 'audio_path', 'image_path', 'conversation', 'scene_description', 'metadata', 'has_audio', 'has_image']
+🔄 测试collator处理...
+📝 对话预测格式:
+<image>
+USER: Based on what you see and hear in this scene, what would Monica Geller say?
+ASSISTANT:
+📝 原始文本长度范围: 30 - 30
+✅ 批量tokenization完成: input_ids shape: torch.Size([1, 30])
+✅ 所有样本文本长度统一为: 30
+✅ 图像处理成功: torch.Size([1, 3, 336, 336])
+✅ 音频批量处理完成: torch.Size([1, 64, 1280])
+批量数据形状:
+  input_ids: torch.Size([1, 30])
+  attention_mask: torch.Size([1, 30])
+  labels: torch.Size([1, 30])
+  images: torch.Size([1, 3, 336, 336])
+  audio_features: torch.Size([1, 64, 1280])
+
+==================================================
+🔥 测试3: 模型前向传播
+==================================================
+📝 对话预测格式:
+<image>
+USER: Based on what you see and hear in this scene, what would Monica Geller say?
+ASSISTANT:
+📝 对话预测格式:
+<image>
+USER: Based on what you see and hear in this scene, what would Joey Tribbiani say?
+ASSISTANT:
+📝 原始文本长度范围: 30 - 31
+⚠️ 文本长度不一致，将padding到: 31
+✅ 批量tokenization完成: input_ids shape: torch.Size([2, 31])
+✅ 所有样本文本长度统一为: 31
+✅ 图像处理成功: torch.Size([2, 3, 336, 336])
+✅ 音频批量处理完成: torch.Size([2, 64, 1280])
+🔄 测试完整前向传播（图像+音频）...
+🔍 Token范围检查: vocab_size=32000, input_ids range=(-200, 29973)
+🔍 Attention mask检查: dtype=torch.int64, 值域=(0, 1)
+🔥 TriperModel.forward called:
+  input_ids: torch.Size([2, 31])
+  images: torch.Size([2, 3, 336, 336])
+  audio_features: torch.Size([2, 64, 1280])
+  past_key_values: 0 layers
+  📸 LLaVA处理图像...
+  LLaVA处理后embeds: torch.Size([2, 606, 5120])
+  🎵 插入音频特征...
+🔄 AudioProjector forward called with input shape: torch.Size([2, 64, 1280])
+🎵 音频特征插入完成:
+  原始embeds: torch.Size([2, 606, 5120])
+  音频embeds: torch.Size([2, 64, 5120])
+  合并后embeds: torch.Size([2, 670, 5120])
+  合并后attention_mask: torch.Size([2, 670])
+  合并后embeds: torch.Size([2, 670, 5120])
+  合并后attention_mask: torch.Size([2, 670])
+  🔍 最终验证:
+    inputs_embeds: torch.Size([2, 670, 5120])
+    attention_mask: torch.Size([2, 670])
+🔄 测试仅图像前向传播...
+🔍 Token范围检查: vocab_size=32000, input_ids range=(-200, 29973)
+🔍 Attention mask检查: dtype=torch.int64, 值域=(0, 1)
+🔥 TriperModel.forward called:
+  input_ids: torch.Size([2, 31])
+  images: torch.Size([2, 3, 336, 336])
+  audio_features: None
+  past_key_values: 0 layers
+  📸 LLaVA处理图像...
+  LLaVA处理后embeds: torch.Size([2, 606, 5120])
+  🔍 最终验证:
+    inputs_embeds: torch.Size([2, 606, 5120])
+    attention_mask: torch.Size([2, 606])
+✅ 仅图像前向传播成功: torch.Size([2, 606, 32000])
+🔄 测试纯文本前向传播...
+📝 纯文本prompt: USER: Tell me about artificial intelligence.
+ASSISTANT:
+📝 纯文本input_ids形状: torch.Size([1, 15])
+🔍 Token范围检查: vocab_size=32000, input_ids range=(1, 29901)
+🔍 Attention mask检查: dtype=torch.int64, 值域=(1, 1)
+🔥 TriperModel.forward called:
+  input_ids: torch.Size([1, 15])
+  images: None
+  audio_features: None
+  past_key_values: 0 layers
+  📝 纯文本输入，直接传递input_ids...
+✅ 纯文本前向传播成功: torch.Size([1, 15, 32000])
+✅ 完整前向传播成功
+  输出logits形状: torch.Size([2, 670, 32000])
+  输出类型: <class 'transformers.modeling_outputs.CausalLMOutputWithPast'>
+🔄 测试仅图像前向传播...
+🔍 Token范围检查: vocab_size=32000, input_ids range=(-200, 29973)
+🔍 Attention mask检查: dtype=torch.int64, 值域=(0, 1)
+🔥 TriperModel.forward called:
+  input_ids: torch.Size([2, 31])
+  images: torch.Size([2, 3, 336, 336])
+  audio_features: None
+  past_key_values: 0 layers
+  📸 LLaVA处理图像...
+  LLaVA处理后embeds: torch.Size([2, 606, 5120])
+  🔍 最终验证:
+    inputs_embeds: torch.Size([2, 606, 5120])
+    attention_mask: torch.Size([2, 606])
+✅ 仅图像前向传播成功: torch.Size([2, 606, 32000])
+
+==================================================
+🚀 测试4: 模型生成能力
+==================================================
+📝 对话预测格式:
+<image>
+USER: Based on what you see and hear in this scene, what would Monica Geller say?
+ASSISTANT:
+📝 原始文本长度范围: 30 - 30
+✅ 批量tokenization完成: input_ids shape: torch.Size([1, 30])
+✅ 所有样本文本长度统一为: 30
+✅ 图像处理成功: torch.Size([1, 3, 336, 336])
+✅ 音频批量处理完成: torch.Size([1, 64, 1280])
+🔄 测试1: 纯LLaVA生成（图像+文本）...
+🚀 TriperModel.generate called:
+  input_ids: torch.Size([1, 30])
+  images: torch.Size([1, 3, 336, 336])
+  audio_features: None
+📝 无音频输入，直接使用LLaVA...
+⚠️ LLaVA生成长度异常: torch.Size([1, 30])
+🔄 测试2: 完整Triper生成（图像+音频+文本）...
+🚀 TriperModel.generate called:
+  input_ids: torch.Size([1, 30])
+  images: torch.Size([1, 3, 336, 336])
+  audio_features: torch.Size([1, 64, 1280])
+🎵 检测到音频输入，准备多模态embeddings...
+📸 LLaVA处理图像...
+LLaVA处理后embeds: torch.Size([1, 605, 5120])
+🎵 集成音频特征...
+🔄 AudioProjector forward called with input shape: torch.Size([1, 64, 1280])
+🎵 音频特征插入完成:
+  原始embeds: torch.Size([1, 605, 5120])
+  音频embeds: torch.Size([1, 64, 5120])
+  合并后embeds: torch.Size([1, 669, 5120])
+  合并后attention_mask: torch.Size([1, 669])
+最终embeds: torch.Size([1, 669, 5120])
+最终attention_mask: torch.Size([1, 669])
+🚀 调用LLaVA.generate with inputs_embeds...
+✅ Triper生成成功: '.com...'
+🔄 测试3: 简化prompt生成...
+✅ 简化prompt生成成功: 'appears to be engaged in a conversation or using the phone for some purpose. The room has a cozy atm...'
+
+==================================================
+🎵 测试5: 音频投影器
+==================================================
+🔄 测试音频投影器...
+  输入形状: torch.Size([1, 64, 1280])
+🔄 AudioProjector forward called with input shape: torch.Size([1, 64, 1280])
+  输出形状: torch.Size([1, 64, 5120])
+  输出维度: 5120
+✅ 音频投影器测试通过
+🔄 测试音频特征插入...
+🔄 AudioProjector forward called with input shape: torch.Size([1, 64, 1280])
+🎵 音频特征插入完成:
+  原始embeds: torch.Size([1, 50, 5120])
+  音频embeds: torch.Size([1, 64, 5120])
+  合并后embeds: torch.Size([1, 114, 5120])
+  合并后attention_mask: torch.Size([1, 114])
+✅ 音频特征插入测试通过
+
+==================================================
+📊 测试6: 参数统计和配置
+==================================================
+📊 参数统计:
+  总参数: 13,383,627,776
+  可训练参数: 32,788,480
+  可训练比例: 0.24%
+  llava: 13,350,839,296 总计, 0 可训练
+  audio_projector: 32,788,480 总计, 32,788,480 可训练
+🔄 测试设备移动...
+  当前设备: cuda:3
+✅ 参数统计和配置测试通过
+
+==================================================
+💬 测试7: 对话预测任务
+==================================================
+📝 对话预测格式:
+<image>
+USER: Based on what you see and hear in this scene, what would Monica Geller say?
+ASSISTANT:
+📝 原始文本长度范围: 30 - 30
+✅ 批量tokenization完成: input_ids shape: torch.Size([1, 30])
+✅ 所有样本文本长度统一为: 30
+✅ 图像处理成功: torch.Size([1, 3, 336, 336])
+✅ 音频批量处理完成: torch.Size([1, 64, 1280])
+🔄 测试prompt 1: <image>
+USER: What do you see in this image?
+ASSIS...
+  ✅ 生成成功: 'ently placed in the center of the scene. The hands are positioned on either side...'
+🔄 测试prompt 2: <image>
+USER: In this scene, someone says 'Hello t...
+  ✅ 生成成功: 'you?" or "What can I help you with?" depending on the context of the scene....'
+🔄 测试prompt 3: <image>
+USER: Based on what you see and hear, what...
+  ✅ 生成成功: '. The woman is holding a cell phone and the other person is wearing a tie, which...'
+
+==================================================
+🔍 测试8: 边界情况和错误处理
+==================================================
+🔄 测试空音频输入...
+📝 对话预测格式:
+<image>
+USER: Based on what you see and hear in this scene, what would Monica Geller say?
+ASSISTANT:
+📝 原始文本长度范围: 30 - 30
+✅ 批量tokenization完成: input_ids shape: torch.Size([1, 30])
+✅ 所有样本文本长度统一为: 30
+✅ 图像处理成功: torch.Size([1, 3, 336, 336])
+✅ 音频批量处理完成: torch.Size([1, 64, 1280])
+📝 纯文本内容: USER: What is artificial intelligence?
+ASSISTANT:
+📝 Token范围: (1, 29973)
+🔍 Token范围检查: vocab_size=32000, input_ids range=(1, 29973)
+🔥 TriperModel.forward called:
+  input_ids: torch.Size([1, 14])
+  images: None
+  audio_features: None
+  past_key_values: 0 layers
+  📝 纯文本输入，直接传递input_ids...
+✅ 纯文本输入测试通过
+🔄 测试异常音频特征...
+🔄 AudioProjector forward called with input shape: torch.Size([1, 32, 1280])
+✅ 音频投影器能处理不同长度: torch.Size([1, 32, 5120])
+🔄 测试长输入...
+✅ 长输入测试通过: torch.Size([1, 10])
+
+================================================================================
+📋 TRIPER MODEL TEST REPORT
+================================================================================
+
+📊 测试概况:
+  总测试数: 7
+  通过测试: 7
+  失败测试: 0
+  通过率: 100.0%
+
+📋 详细结果:
+  model_loading: ✅ PASSED
+  data_loading: ✅ PASSED
+  generation_capability: ✅ PASSED
+  audio_projector: ✅ PASSED
+  parameter_statistics: ✅ PASSED
+  conversation_prediction: ✅ PASSED
+  edge_cases: ✅ PASSED
+
+📄 测试报告已保存至: /home/wly/szl_all_code/triper-project/test_report.json

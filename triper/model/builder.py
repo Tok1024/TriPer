@@ -37,27 +37,27 @@ def from_pretrained_components(
         device_map=device_map
     )
     
-    # 🔧 关键修复：确保图像token正确配置
-    print("🔄 Configuring image tokens...")
-    from llava.constants import DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX
+    # # 🔧 关键修复：确保图像token正确配置
+    # print("🔄 Configuring image tokens...")
+    # from llava.constants import DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX
     
-    # 检查并添加图像token
-    if DEFAULT_IMAGE_TOKEN not in tokenizer.get_vocab():
-        print(f"添加图像token: {DEFAULT_IMAGE_TOKEN}")
-        tokenizer.add_tokens([DEFAULT_IMAGE_TOKEN])
+    # # 检查并添加图像token
+    # if DEFAULT_IMAGE_TOKEN not in tokenizer.get_vocab():
+    #     print(f"添加图像token: {DEFAULT_IMAGE_TOKEN}")
+    #     tokenizer.add_tokens([DEFAULT_IMAGE_TOKEN])
         
-        # 调整模型的embedding层
-        llava_model.resize_token_embeddings(len(tokenizer))
+    #     # 调整模型的embedding层
+    #     llava_model.resize_token_embeddings(len(tokenizer))
         
-        # 更新IMAGE_TOKEN_INDEX
-        new_image_id = tokenizer.convert_tokens_to_ids(DEFAULT_IMAGE_TOKEN)
-        import llava.constants
-        import triper.constants
-        llava.constants.IMAGE_TOKEN_INDEX = new_image_id
-        triper.constants.IMAGE_TOKEN_INDEX = new_image_id
-        print(f"更新IMAGE_TOKEN_INDEX为: {new_image_id}")
-    else:
-        print(f"✅ 图像token已存在: {DEFAULT_IMAGE_TOKEN}")
+    #     # 更新IMAGE_TOKEN_INDEX
+    #     new_image_id = tokenizer.convert_tokens_to_ids(DEFAULT_IMAGE_TOKEN)
+    #     import llava.constants
+    #     import triper.constants
+    #     llava.constants.IMAGE_TOKEN_INDEX = new_image_id
+    #     triper.constants.IMAGE_TOKEN_INDEX = new_image_id
+    #     print(f"更新IMAGE_TOKEN_INDEX为: {new_image_id}")
+    # else:
+    #     print(f"✅ 图像token已存在: {DEFAULT_IMAGE_TOKEN}")
     
     # 2. 构建音频编码器（外部组件）
     audio_encoder = None

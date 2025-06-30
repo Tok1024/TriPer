@@ -11,5 +11,9 @@ DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
 DEFAULT_IM_START_TOKEN = "<im_start>"
 DEFAULT_IM_END_TOKEN = "<im_end>"
 IMAGE_PLACEHOLDER = "<image-placeholder>"
-# TODO: 音频token暂定
-AUDIO_TOKEN_INDEX = 666
+
+# 音频相关常量
+AUDIO_TOKEN_INDEX = -300
+DEFAULT_AUDIO_TOKEN = "<audio>"
+
+# 训练相关

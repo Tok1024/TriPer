@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import Optional, Dict, Any, List, Union, Tuple
 from transformers.modeling_utils import PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -126,7 +127,7 @@ class TriperModel(PreTrainedModel):
         return None
     
     
-    # 📊 参数统计（精简版）
+    # 📊 参数统计
     def get_parameter_stats(self) -> Dict[str, Any]:
         """获取参数统计信息 - 只统计可训练组件"""
         components = {
@@ -208,239 +209,173 @@ class TriperModel(PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        **kwargs
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        """
-        Triper模型的前向传播，扩展LLaVA支持音频
-        """
+        """Triper模型的前向传播，扩展LLaVA支持音频"""
         if not self.is_ready():
             raise RuntimeError("模型组件尚未完全配置")
-        
 
-        print (f"初始input ids形状: {input_ids.shape if input_ids is not None else 'None'}")
-        
-        if inputs_embeds is None:
-            # 1. 先处理图像（复用LLaVA的逻辑）
-            if self.llava_model is None:
-                raise RuntimeError("LLaVA model is not attached")
+        # 🔧 添加输入验证和修复
+        if input_ids is not None:
+            # 1. 检查token范围
+            vocab_size = self.llava_model.config.vocab_size
+            print(f"🔍 Token范围检查: vocab_size={vocab_size}, input_ids range=({input_ids.min()}, {input_ids.max()})")
             
-            print("images shape:", images.shape if images is not None else "None")
+            # 修复超出范围的token
+            if input_ids.max() >= vocab_size:
+                print(f"⚠️ 发现超出词汇表的token，截断到{vocab_size-1}")
+                input_ids = torch.clamp(input_ids, 0, vocab_size - 1)
             
-            multimodal_result = self.llava_model.prepare_inputs_labels_for_multimodal(
-                input_ids,
-                position_ids,
-                attention_mask,
-                past_key_values,
-                labels,
-                images,
-            )
+            # 2. 确保数据类型正确
+            if input_ids.dtype != torch.long:
+                input_ids = input_ids.long()
+    
+        if attention_mask is not None:
+            print(f"🔍 Attention mask检查: dtype={attention_mask.dtype}, 值域=({attention_mask.min()}, {attention_mask.max()})")
             
+            # 1. 确保数据类型正确
+            if attention_mask.dtype not in [torch.long, torch.int, torch.bool]:
+                print(f"⚠️ 修复attention_mask dtype: {attention_mask.dtype} -> torch.long")
+                attention_mask = attention_mask.long()
             
+            # 2. 确保值在有效范围内[0, 1]
+            if attention_mask.min() < 0 or attention_mask.max() > 1:
+                print(f"⚠️ 修复attention_mask值域: ({attention_mask.min()}, {attention_mask.max()}) -> [0, 1]")
+                attention_mask = torch.clamp(attention_mask, 0, 1)
+            
+            # 3. 检查NaN/Inf
+            if torch.isnan(attention_mask).any() or torch.isinf(attention_mask).any():
+                print("⚠️ 检测到NaN/Inf，重置attention_mask...")
+                attention_mask = torch.ones_like(attention_mask)
 
-            # 明确类型转换
-            input_ids = multimodal_result[0]
-            position_ids = multimodal_result[1] 
-            attention_mask = multimodal_result[2]
-            past_key_values = multimodal_result[3]
-            inputs_embeds = multimodal_result[4]
-            labels = multimodal_result[5]
-            
-            print(f"处理图像后, embedding形状: {inputs_embeds.shape if inputs_embeds is not None else 'None'}")
-            
-        # 2. 处理音频特征（新增逻辑）
-        if audio_features is not None:
-            inputs_embeds = self._insert_audio_features(
-                inputs_embeds, input_ids, audio_features
+        print(f"🔥 TriperModel.forward called:")
+        print(f"  input_ids: {input_ids.shape if input_ids is not None else 'None'}")
+        print(f"  images: {images.shape if images is not None else 'None'}")
+        print(f"  audio_features: {audio_features.shape if audio_features is not None else 'None'}")
+        print(f"  past_key_values: {len(past_key_values) if past_key_values else 0} layers")
+        
+        # 🎯 关键修复：如果input_ids为None但有past_key_values，说明是后续生成步骤
+        if input_ids is None and past_key_values is not None and len(past_key_values) > 0:
+            print("  ⚡ input_ids为None且有past_key_values，直接调用LLaVA...")
+            return self.llava_model.__class__.forward(
+                self.llava_model,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                **kwargs
             )
-            
-            print(f"插入音频后, 嵌入形状: {inputs_embeds.shape if inputs_embeds is not None else 'None'}")
+
+        # 🔧 确定是否需要处理多模态输入
+        need_multimodal_processing = (images is not None) or (audio_features is not None)
         
-        # 🔧 批量序列长度对齐 - 修复类型问题
-        if inputs_embeds is not None and inputs_embeds.shape[0] > 1:  # 只在批量处理时执行
-            print(f"🔍 批量长度对齐前:")
-            print(f"  inputs_embeds shape: {inputs_embeds.shape}")
-            print(f"  attention_mask shape: {attention_mask.shape if attention_mask is not None else None}")
+        if inputs_embeds is None and input_ids is not None and need_multimodal_processing:
+            # 有多模态输入，需要处理
             
-            # 检查每个样本的实际长度
-            if attention_mask is not None:
-                actual_lengths = attention_mask.sum(dim=1)
-                print(f"  实际长度: {actual_lengths.tolist()}")
-                
-                # 找到最大的实际长度 - 明确类型转换
-                max_actual_length = int(actual_lengths.max().item())
-                
-                # 如果存在长度不一致，截断到最大实际长度
-                if inputs_embeds.shape[1] != max_actual_length:
-                    print(f"🔧 截断序列长度: {inputs_embeds.shape[1]} → {max_actual_length}")
-                    
-                    inputs_embeds = inputs_embeds[:, :max_actual_length, :]
-                    attention_mask = attention_mask[:, :max_actual_length]
-                    
-                    if position_ids is not None:
-                        position_ids = position_ids[:, :max_actual_length]
-                    if labels is not None:
-                        labels = labels[:, :max_actual_length]
-                        
-                    print(f"✅ 对齐后 inputs_embeds shape: {inputs_embeds.shape}")
-            
-            # 🔧 关键修复：确保所有样本的长度完全一致
-            batch_size = inputs_embeds.shape[0]
-            
-            # 如果没有attention_mask，创建统一的attention_mask
-            if attention_mask is None:
-                attention_mask = torch.ones(
-                    (batch_size, inputs_embeds.shape[1]), 
-                    dtype=torch.bool, 
-                    device=inputs_embeds.device
+            # 1. LLaVA处理图像
+            if images is not None:
+                print("  📸 LLaVA处理图像...")
+                multimodal_result = self.llava_model.prepare_inputs_labels_for_multimodal(
+                    input_ids, position_ids, attention_mask, past_key_values, labels, images, image_sizes
                 )
-            
-            # 检查是否所有样本长度都相同
-            actual_lengths = attention_mask.sum(dim=1)
-            unique_lengths = set(actual_lengths.tolist())
-            
-            if len(unique_lengths) > 1:
-                # 如果长度不同，统一到最长的长度，进行padding而不是截断
-                max_length = int(actual_lengths.max().item())  # 改为最大长度
-                print(f"⚠️ 检测到不同长度，统一到最长长度: {max_length}")
-                
-                # 为每个样本进行padding
-                batch_size = inputs_embeds.shape[0]
-                embed_dim = inputs_embeds.shape[2]
-                
-                # 创建新的padded tensors
-                new_inputs_embeds = torch.zeros(
-                    (batch_size, max_length, embed_dim),
-                    dtype=inputs_embeds.dtype,
-                    device=inputs_embeds.device
+                input_ids, position_ids, attention_mask, past_key_values, inputs_embeds, labels = multimodal_result
+                print(f"  LLaVA处理后embeds: {inputs_embeds.shape}")
+            else:
+                # 没有图像，直接获取文本embeds
+                inputs_embeds = self.llava_model.get_model().embed_tokens(input_ids)
+                print(f"  纯文本embeds: {inputs_embeds.shape}")
+
+            # 2. 插入音频特征（只在第一步且有input_ids时）
+            if audio_features is not None:
+                print("  🎵 插入音频特征...")
+                inputs_embeds, attention_mask = self._insert_audio_features(
+                    inputs_embeds, input_ids, audio_features, attention_mask
                 )
-                new_attention_mask = torch.zeros(
-                    (batch_size, max_length),
-                    dtype=attention_mask.dtype,
-                    device=attention_mask.device
-                )
-                
-                # 为每个样本填充数据
-                for i in range(batch_size):
-                    actual_len = int(actual_lengths[i].item())
-                    # 复制实际数据
-                    new_inputs_embeds[i, :actual_len, :] = inputs_embeds[i, :actual_len, :]
-                    new_attention_mask[i, :actual_len] = 1
-                    # 剩余部分自动为0 (padding)
-                
-                inputs_embeds = new_inputs_embeds
-                attention_mask = new_attention_mask
-                
-                # 处理其他张量
-                if position_ids is not None:
-                    new_position_ids = torch.zeros(
-                        (batch_size, max_length),
-                        dtype=position_ids.dtype,
-                        device=position_ids.device
-                    )
-                    for i in range(batch_size):
-                        actual_len = int(actual_lengths[i].item())
-                        if actual_len <= position_ids.shape[1]:
-                            new_position_ids[i, :actual_len] = position_ids[i, :actual_len]
-                        else:
-                            # 如果position_ids较短，扩展它
-                            new_position_ids[i, :position_ids.shape[1]] = position_ids[i]
-                            new_position_ids[i, position_ids.shape[1]:actual_len] = torch.arange(
-                                position_ids.shape[1], actual_len,
-                                dtype=position_ids.dtype, device=position_ids.device
-                            )
-                    position_ids = new_position_ids
-                
-                if labels is not None:
-                    new_labels = torch.full(
-                        (batch_size, max_length),
-                        -100,  # ignore_index for loss calculation
-                        dtype=labels.dtype,
-                        device=labels.device
-                    )
-                    for i in range(batch_size):
-                        actual_len = min(int(actual_lengths[i].item()), labels.shape[1])
-                        new_labels[i, :actual_len] = labels[i, :actual_len]
-                    labels = new_labels
-                    
-                print(f"🔧 最终padding后 inputs_embeds shape: {inputs_embeds.shape}")
-                print(f"🔧 最终padding后 attention_mask shape: {attention_mask.shape}")
-        
-        # 3. 调用基础LLM
-        if self.llava_model is None:
-            raise RuntimeError("LLaVA model is not attached")
-        
-        return self.llava_model(
-            input_ids=input_ids,
+                print(f"  合并后embeds: {inputs_embeds.shape}")
+                print(f"  合并后attention_mask: {attention_mask.shape}")
+
+            print(f"  🔍 最终验证:")
+            print(f"    inputs_embeds: {inputs_embeds.shape if inputs_embeds is not None else None}")
+            print(f"    attention_mask: {attention_mask.shape if attention_mask is not None else None}")
+            
+            # 🔧 关键修复：处理完多模态后，清空input_ids
+            input_ids = None  # 确保只传递inputs_embeds
+            
+        elif inputs_embeds is None and input_ids is not None and not need_multimodal_processing:
+            # 🔧 纯文本情况：直接传递input_ids，不生成inputs_embeds
+            print("  📝 纯文本输入，直接传递input_ids...")
+            pass  # 保持input_ids，不设置inputs_embeds
+
+        # 3. 调用LLaVA进行前向传播
+        return self.llava_model.forward(
+            input_ids=input_ids,  # 多模态时为None，纯文本时为原值
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
+            inputs_embeds=inputs_embeds,  # 多模态时有值，纯文本时为None
             labels=labels,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict
-        )
+            return_dict=return_dict,
+            **kwargs
+        ) # type: ignore
 
-    def _insert_audio_features(
-        self, 
-        inputs_embeds: Optional[torch.Tensor],  
-        input_ids: Optional[torch.LongTensor], 
-        audio_features: torch.Tensor          
-    ) -> torch.Tensor:                        
-        """插入音频特征到嵌入序列中"""
 
-        # 处理音频特征
-        if self._audio_encoder is None:
-            raise RuntimeError("Audio encoder is not set")
+    def _insert_audio_features(self, inputs_embeds, input_ids, audio_features, attention_mask=None):
+        """插入音频特征到序列末尾，同时更新attention_mask"""
+        if audio_features is None:
+            return inputs_embeds, attention_mask
+
+        batch_size = inputs_embeds.shape[0]
+        audio_seq_len = audio_features.shape[1]
         
-        
-        # 🔧 关键修复：确保音频编码器输出正确的数据类型
-        with torch.no_grad():
-            encoded_audio = self._audio_encoder(audio_features)
-            
-            # 确保编码后的音频特征类型正确
-            if hasattr(self.llava_model, 'dtype'):
-                target_dtype = self.llava_model.dtype
+        # 1. 确保attention_mask与当前inputs_embeds长度匹配
+        if attention_mask is not None and attention_mask.shape[1] != inputs_embeds.shape[1]:
+            # 动态调整到实际的embeds长度
+            actual_text_len = inputs_embeds.shape[1]
+            if attention_mask.shape[1] > actual_text_len:
+                attention_mask = attention_mask[:, :actual_text_len]
             else:
-                # 从LLaVA模型的参数推断数据类型
-                target_dtype = next(self.llava_model.parameters()).dtype
-            
-            if encoded_audio.dtype != target_dtype:
-                print(f"  🔄 Converting encoded audio to {target_dtype}")
-                encoded_audio = encoded_audio.to(dtype=target_dtype)
-    
-        if self.audio_projector is None:
-            raise RuntimeError("Audio projector is not set")
-        
-        # 音频嵌入 - 投影器会自动处理数据类型匹配
-        audio_embeds = self.audio_projector(encoded_audio)
-        
-        
-        # 连接到 inputs_embeds 末尾
-        if inputs_embeds is None:
-            return audio_embeds
-        else:
-            print(f"  Inputs embeds shape: {inputs_embeds.shape}")
-            print(f"  Inputs embeds dtype: {inputs_embeds.dtype}")
-            
-            # 🔧 确保数据类型匹配
-            if audio_embeds.dtype != inputs_embeds.dtype:
-                print(f"  🔄 Converting audio embeds to match inputs_embeds dtype")
-                audio_embeds = audio_embeds.to(dtype=inputs_embeds.dtype)
-            
-            # 确保音频特征与输入嵌入的维度匹配
-            if audio_embeds.size(-1) != inputs_embeds.size(-1):
-                raise ValueError(
-                    f"Audio features dimension ({audio_embeds.size(-1)}) "
-                    f"does not match input embeddings dimension ({inputs_embeds.size(-1)})"
+                # 填充到实际长度
+                padding = torch.ones(
+                    (batch_size, actual_text_len - attention_mask.shape[1]),
+                    dtype=attention_mask.dtype, device=inputs_embeds.device
                 )
-            
-            # 拼接张量
-            result = torch.cat([inputs_embeds, audio_embeds], dim=1)
-            print(f"  Final result shape: {result.shape}")
-            print(f"  Final result dtype: {result.dtype}")
-            return result
-
+                attention_mask = torch.cat([attention_mask, padding], dim=1)
+    
+        # 投影音频特征
+        audio_embeds = self.audio_projector(audio_features)
+        
+        # 类型对齐
+        if audio_embeds.dtype != inputs_embeds.dtype:
+            audio_embeds = audio_embeds.to(inputs_embeds.dtype)
+        
+        # 拼接特征
+        combined_embeds = torch.cat([inputs_embeds, audio_embeds], dim=1)
+        
+        # 3. 扩展attention_mask以匹配最终长度
+        audio_mask = torch.ones((batch_size, audio_embeds.shape[1]), dtype=attention_mask.dtype, device=inputs_embeds.device)
+        final_attention_mask = torch.cat([attention_mask, audio_mask], dim=1)
+        
+        print(f"🎵 音频特征插入完成:")
+        print(f"  原始embeds: {inputs_embeds.shape}")
+        print(f"  音频embeds: {audio_embeds.shape}")
+        print(f"  合并后embeds: {combined_embeds.shape}")
+        print(f"  合并后attention_mask: {final_attention_mask.shape}")
+        
+        # 🔧 验证长度一致性
+        assert combined_embeds.shape[1] == final_attention_mask.shape[1], \
+            f"长度不匹配: embeds={combined_embeds.shape[1]}, mask={final_attention_mask.shape[1]}"
+        
+        return combined_embeds, final_attention_mask
+    
     # 🔍 便捷检查方法
     def is_ready(self) -> bool:
         """检查模型是否准备好推理"""
@@ -478,3 +413,101 @@ class TriperModel(PreTrainedModel):
             return next(self.llava_model.parameters()).device
         return next(self.parameters()).device
 
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, 
+                                      attention_mask=None, inputs_embeds=None, **kwargs):
+        """
+        🎯 核心方法：为生成过程准备输入
+        这个方法控制generate循环，为每一步的解码准备输入
+        """
+        print(f"🔧 TriperModel.prepare_inputs_for_generation called:")
+        print(f"  input_ids: {input_ids.shape if input_ids is not None else None}")
+        print(f"  past_key_values: {len(past_key_values) if past_key_values else 0} layers")
+        print(f"  inputs_embeds: {inputs_embeds.shape if inputs_embeds is not None else None}")
+        
+        # 如果不是第一步（已经有缓存的key/value），那么input_ids就只是最新生成的那个token
+        if past_key_values:
+            input_ids = input_ids[:, -1:]
+            print(f"  🔄 后续步骤，input_ids截取为: {input_ids.shape}")
+        
+        # 调用LLaVA的prepare_inputs_for_generation，让它处理大部分的准备工作
+        model_inputs = self.llava_model.prepare_inputs_for_generation(
+            input_ids, 
+            past_key_values=past_key_values, 
+            attention_mask=attention_mask, 
+            inputs_embeds=inputs_embeds, 
+            **kwargs
+        )
+        
+        print(f"  ✅ LLaVA准备的inputs: {list(model_inputs.keys())}")
+        return model_inputs
+
+    @torch.no_grad()
+    def generate(
+        self,
+        input_ids: torch.LongTensor,
+        images: Optional[torch.FloatTensor] = None,
+        image_sizes: Optional[List[List[int]]] = None,
+        audio_features: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs
+    ):
+        """🚀 简化版的Triper generate方法"""
+        if not self.is_ready():
+            raise RuntimeError("模型组件尚未完全配置，无法进行生成")
+        
+        print(f"🚀 TriperModel.generate called:")
+        print(f"  input_ids: {input_ids.shape}")
+        print(f"  images: {images.shape if images is not None else None}")
+        print(f"  audio_features: {audio_features.shape if audio_features is not None else None}")
+
+        # 🔧 如果没有音频，直接调用LLaVA的generate
+        if audio_features is None:
+            print("📝 无音频输入，直接使用LLaVA...")
+            return self.llava_model.generate(
+                inputs=input_ids,  # 注意：LLaVA期望的是inputs，不是input_ids
+                images=images,
+                image_sizes=image_sizes,
+                attention_mask=attention_mask,
+                **kwargs
+            )
+        
+        # 🎯 有音频的情况：手动准备inputs_embeds然后调用LLaVA
+        print("🎵 检测到音频输入，准备多模态embeddings...")
+        
+        # 🔧 修复attention_mask长度问题
+        if attention_mask is not None and input_ids is not None:
+            if attention_mask.shape[1] != input_ids.shape[1]:
+                print(f"⚠️ attention_mask长度不匹配，截取到文本长度")
+                attention_mask = attention_mask[:, :input_ids.shape[1]]
+        
+        # 1. 准备多模态inputs_embeds
+        if images is not None:
+            print("📸 LLaVA处理图像...")
+            multimodal_result = self.llava_model.prepare_inputs_labels_for_multimodal(
+                input_ids, None, attention_mask, None, None, images, image_sizes
+            )
+            _, _, attention_mask, _, inputs_embeds, _ = multimodal_result
+            print(f"LLaVA处理后embeds: {inputs_embeds.shape}")
+        else:
+            # 没有图像，直接获取文本embeds
+            inputs_embeds = self.llava_model.get_model().embed_tokens(input_ids)
+            print(f"纯文本embeds: {inputs_embeds.shape}")
+
+        # 2. 集成音频
+        print("🎵 集成音频特征...")
+        inputs_embeds, attention_mask = self._insert_audio_features(
+            inputs_embeds, input_ids, audio_features, attention_mask
+        )
+        print(f"最终embeds: {inputs_embeds.shape}")
+        print(f"最终attention_mask: {attention_mask.shape}")
+
+        # # 3. 直接调用LLaVA的generate，传入准备好的inputs_embeds
+        
+        print("🚀 调用LLaVA.generate with inputs_embeds...")
+        from transformers import Llama4ForCausalLM
+        return Llama4ForCausalLM.generate(
+            self.llava_model,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            **kwargs
+        )
